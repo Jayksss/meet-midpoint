@@ -373,7 +373,7 @@ export default function MeetMidpoint() {
       <header className="border-b border-zinc-200 bg-white">
         <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 py-5">
           <div>
-            <div className="text-lg font-semibold text-zinc-900">Meet Midpoint</div>
+            <div className="text-lg font-semibold text-zinc-900">중간지점 찾기</div>
             <div className="mt-1 text-sm text-zinc-600">
               최대 6개 장소를 입력하고 중간지점을 찾아요.
             </div>
@@ -503,8 +503,6 @@ export default function MeetMidpoint() {
 
             <div className="mt-4 text-xs leading-6 text-zinc-500">
               최소 2개 이상의 장소를 선택해야 중간지점을 찾을 수 있어요.
-              <br />
-              카카오맵 키가 없으면 자동완성과 지도 표시가 동작하지 않을 수 있어요.
             </div>
           </section>
 
@@ -537,7 +535,7 @@ export default function MeetMidpoint() {
               <div className="rounded-2xl border border-zinc-200 bg-white p-4">
                 <div className="grid grid-cols-1 gap-3 text-sm text-zinc-800 sm:grid-cols-2">
                   <div className="flex flex-col gap-1">
-                    <div className="text-xs font-semibold text-emerald-700">중간지점 주소</div>
+                    <div className="text-xs font-semibold text-zinc-500">중간지점 주소</div>
                     <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2">
                       {midpointDetails.address ?? (
                         <span className="text-zinc-500">주소를 찾지 못했어요.</span>
@@ -546,11 +544,11 @@ export default function MeetMidpoint() {
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <div className="text-xs font-semibold text-red-600">가장 가까운 지하철역</div>
+                    <div className="text-xs font-semibold text-zinc-500">가장 가까운 지하철역</div>
                     <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2">
                       {midpointDetails.nearestSubway ? (
                         <div className="flex flex-wrap items-baseline justify-between gap-2">
-                          <div className="font-semibold text-red-600">
+                          <div className="font-semibold text-zinc-900">
                             {midpointDetails.nearestSubway.name}
                           </div>
                           <div className="text-xs text-zinc-600">

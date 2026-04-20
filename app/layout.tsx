@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Meet Midpoint",
+  title: "중간지점 찾기",
   description: "Find the midpoint between multiple places",
 };
 
