@@ -376,6 +376,9 @@ export default function MeetMidpoint() {
             <div className="text-lg font-semibold text-zinc-900">중간지점 찾기</div>
             <div className="mt-1 text-sm text-zinc-600">
               최대 6개 장소를 입력하고 중간지점을 찾아요.
+              <span className="mt-1 block text-xs text-zinc-500">
+                지도는 기본으로 강남역을 중심으로 시작합니다.
+              </span>
             </div>
           </div>
         </div>
@@ -421,7 +424,7 @@ export default function MeetMidpoint() {
                     />
                     <button
                       type="button"
-                      className="h-10 shrink-0 rounded-xl border border-zinc-200 px-3 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
+                      className="h-10 shrink-0 cursor-pointer rounded-xl border border-zinc-200 px-3 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
                       onClick={() => clearRow(idx)}
                     >
                       지우기
@@ -447,7 +450,7 @@ export default function MeetMidpoint() {
                             <li key={s.id}>
                               <button
                                 type="button"
-                                className="w-full px-3 py-2 text-left hover:bg-zinc-50"
+                                className="w-full cursor-pointer px-3 py-2 text-left hover:bg-zinc-50"
                                 onClick={() => onPickSuggestion(idx, s)}
                               >
                                 <div className="text-sm font-semibold text-zinc-900">
@@ -494,7 +497,7 @@ export default function MeetMidpoint() {
             ) : null}
 
             <button
-              className="mt-4 inline-flex h-11 w-full items-center justify-center rounded-xl bg-zinc-900 px-5 text-sm font-semibold text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+              className="mt-4 inline-flex h-11 w-full cursor-pointer items-center justify-center rounded-xl bg-zinc-900 px-5 text-sm font-semibold text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
               onClick={run}
               disabled={!canRun}
             >
