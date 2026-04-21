@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import KakaoMap, { type SelectedPlace } from "@/app/ui/KakaoMap";
-import SeoulTransitExperimentPanel from "@/app/ui/SeoulTransitExperimentPanel";
+import TmapMap, { type SelectedPlace } from "@/app/ui/TmapMap";
+import TmapExperimentPanel from "@/app/ui/TmapExperimentPanel";
+import { parseTmapTransitPath, pickTmapTransitSummary } from "@/lib/tmap-transit-path-parse";
 import ProgressModal from "@/app/ui/ProgressModal";
 import MobileMidpointResultModal from "@/app/ui/MobileMidpointResultModal";
 
@@ -103,18 +104,44 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function waitForKakaoServicesReady() {
-  const start = Date.now();
-  while (Date.now() - start < 8000) {
-    const services = window.kakao?.maps?.services;
-    if (
-      typeof window !== "undefined" &&
-      services?.Places &&
-      (services as { Geocoder?: unknown }).Geocoder
-    )
-      return;
-    await sleep(50);
+function haversineMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const R = 6371000;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const lat1 = (a.lat * Math.PI) / 180;
+  const lat2 = (b.lat * Math.PI) / 180;
+  const s1 = Math.sin(dLat / 2);
+  const s2 = Math.sin(dLng / 2);
+  const h = s1 * s1 + Math.cos(lat1) * Math.cos(lat2) * s2 * s2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+function routeMidpointByDistance(points: { lat: number; lng: number }[]): { lat: number; lng: number } | null {
+  if (points.length < 2) return null;
+  let total = 0;
+  for (let i = 0; i < points.length - 1; i++) total += haversineMeters(points[i], points[i + 1]);
+  if (!Number.isFinite(total) || total <= 0) return null;
+
+  const half = total / 2;
+  let acc = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    const seg = haversineMeters(a, b);
+    if (!Number.isFinite(seg) || seg <= 0) continue;
+    if (acc + seg >= half) {
+      const t = (half - acc) / seg;
+      return { lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t };
+    }
+    acc += seg;
   }
+  return points[Math.floor(points.length / 2)] ?? null;
+}
+
+function toArray(v: unknown): unknown[] {
+  if (v == null) return [];
+  if (Array.isArray(v)) return v;
+  return [v];
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -136,17 +163,30 @@ function pickNumber(rec: Record<string, unknown>, key: string) {
   return Number.NaN;
 }
 
-function normalizeSuggestion(item: unknown): Suggestion {
+function normalizeTmapPoi(item: unknown): Suggestion | null {
   const rec = asRecord(item);
-  const label = pickString(rec, ["place_name", "address_name", "road_address_name"]);
-  const address = pickString(rec, ["road_address_name", "address_name"]);
-  const lat = pickNumber(rec, "y");
-  const lng = pickNumber(rec, "x");
+  const label = pickString(rec, ["name"]);
+  const lat =
+    pickNumber(rec, "noorLat") ||
+    pickNumber(rec, "frontLat") ||
+    pickNumber(rec, "lat") ||
+    Number.NaN;
+  const lng =
+    pickNumber(rec, "noorLon") ||
+    pickNumber(rec, "frontLon") ||
+    pickNumber(rec, "lon") ||
+    Number.NaN;
+  if (!label || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const upper = pickString(rec, ["upperAddrName"]);
+  const middle = pickString(rec, ["middleAddrName"]);
+  const road = pickString(rec, ["roadName"]);
+  const lot = pickString(rec, ["firstNo", "secondNo"]);
+  const address =
+    [upper, middle, road, lot].filter(Boolean).join(" ").trim() ||
+    pickString(rec, ["addr"]) ||
+    "";
   return {
-    id:
-      typeof rec.id === "string" && rec.id.trim().length > 0
-        ? rec.id
-        : `${label}-${lat},${lng}`,
+    id: pickString(rec, ["id", "pkey"]) || `${label}-${lat},${lng}`,
     label,
     address,
     lat,
@@ -155,89 +195,71 @@ function normalizeSuggestion(item: unknown): Suggestion {
 }
 
 async function keywordSearch(query: string): Promise<Suggestion[]> {
-  await waitForKakaoServicesReady();
-  const kakao = window.kakao;
-  if (!kakao?.maps?.services?.Places) return [];
-
-  return await new Promise((resolve) => {
-    const places = new kakao.maps.services.Places();
-    places.keywordSearch(
-      query,
-      (data: unknown[], status: string) => {
-        if (status !== kakao.maps.services.Status.OK) return resolve([]);
-        resolve(data.slice(0, 8).map(normalizeSuggestion));
-      },
-      { size: 8 }
-    );
+  const qs = new URLSearchParams({
+    searchKeyword: query,
+    count: "8",
+    page: "1",
   });
+  const res = await fetch(`/api/tmap/pois?${qs}`);
+  const json = (await res.json()) as { ok?: boolean; data?: unknown };
+  if (!res.ok || !json.ok || !json.data) return [];
+  const data = asRecord(json.data);
+  const spi = asRecord(data.searchPoiInfo);
+  const pois = asRecord(spi.pois);
+  const list = toArray(pois.poi);
+  return list.map(normalizeTmapPoi).filter((s): s is Suggestion => s != null);
+}
+
+function pickReverseGeocodeAddress(data: unknown): string | null {
+  const d = asRecord(data);
+  const ai = asRecord(d.addressInfo);
+  const full = asRecord(ai.fullAddress);
+  const fromFull =
+    pickString(full, ["address", "addressName"]) ||
+    pickString(ai, ["legalAddress", "roadAddress", "address"]);
+  if (fromFull) return fromFull;
+  return pickString(ai, ["address", "legalAddress", "roadAddress"]) || null;
 }
 
 async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
-  await waitForKakaoServicesReady();
-  const kakao = window.kakao;
-  const Geocoder = kakao?.maps?.services?.Geocoder;
-  if (!Geocoder) return null;
-
-  return await new Promise((resolve) => {
-    const geocoder = new Geocoder();
-    geocoder.coord2Address(lng, lat, (result: unknown[], status: string) => {
-      if (!kakao?.maps?.services) return resolve(null);
-      if (status !== kakao.maps.services.Status.OK) return resolve(null);
-      const first = result[0];
-      const rec = asRecord(first);
-      const road = asRecord(rec.road_address);
-      const addr = asRecord(rec.address);
-      const name =
-        pickString(road, ["address_name"]) || pickString(addr, ["address_name"]) || null;
-      resolve(name);
-    });
-  });
+  const qs = new URLSearchParams({ lat: String(lat), lon: String(lng) });
+  const res = await fetch(`/api/tmap/reverse-geocode?${qs}`);
+  const json = (await res.json()) as { ok?: boolean; data?: unknown };
+  if (!res.ok || !json.ok || !json.data) return null;
+  return pickReverseGeocodeAddress(json.data);
 }
 
 async function nearestSubwayStation(
   lat: number,
   lng: number
 ): Promise<MidpointDetails["nearestSubway"]> {
-  await waitForKakaoServicesReady();
-  const kakao = window.kakao;
-  if (!kakao?.maps?.services?.Places) return null;
-
-  const places = new kakao.maps.services.Places();
-  const categorySearch = places.categorySearch;
-  if (!categorySearch) return null;
-
-  const sortByDistance = kakao.maps.services.SortBy?.DISTANCE;
-
-  return await new Promise((resolve) => {
-    categorySearch(
-      "SW8",
-      (data: unknown[], status: string) => {
-        if (status !== kakao.maps.services.Status.OK) return resolve(null);
-        const first = data[0];
-        const rec = asRecord(first);
-        const name = pickString(rec, ["place_name"]);
-        const address = pickString(rec, ["road_address_name", "address_name"]);
-        const distanceStr = pickString(rec, ["distance"]);
-        const distanceM = distanceStr ? Number(distanceStr) : null;
-        const stationLat = pickNumber(rec, "y");
-        const stationLng = pickNumber(rec, "x");
-        if (!name) return resolve(null);
-        resolve({
-          name,
-          address,
-          distanceM: Number.isFinite(distanceM) ? distanceM : null,
-          lat: stationLat,
-          lng: stationLng,
-        });
-      },
-      {
-        location: new kakao.maps.LatLng(lat, lng),
-        radius: 5000,
-        sort: sortByDistance,
-        size: 1,
-      }
-    );
+  const qs = new URLSearchParams({
+    searchKeyword: "지하철역",
+    centerLat: String(lat),
+    centerLon: String(lng),
+    radius: "5",
+    searchtypCd: "R",
+    count: "5",
   });
+  const res = await fetch(`/api/tmap/pois?${qs}`);
+  const json = (await res.json()) as { ok?: boolean; data?: unknown };
+  if (!res.ok || !json.ok || !json.data) return null;
+  const data = asRecord(json.data);
+  const spi = asRecord(data.searchPoiInfo);
+  const pois = asRecord(spi.pois);
+  const list = toArray(pois.poi);
+  const first = normalizeTmapPoi(list[0]);
+  if (!first) return null;
+  const rec = asRecord(list[0]);
+  const dist = pickString(rec, ["distance", "radius"]);
+  const distanceM = dist ? Number(dist) : null;
+  return {
+    name: first.label,
+    address: first.address,
+    distanceM: Number.isFinite(distanceM) ? distanceM : null,
+    lat: first.lat,
+    lng: first.lng,
+  };
 }
 
 export default function MeetMidpoint() {
@@ -256,6 +278,15 @@ export default function MeetMidpoint() {
   const [showGangnamStartMarker, setShowGangnamStartMarker] = useState(true);
   /** 모바일에서만: 찾기 완료 후 결과 요약 모달 */
   const [mobileResultOpen, setMobileResultOpen] = useState(false);
+  /** 1·2번: TMAP 대중교통 경로 좌표 */
+  const [routeBetween12, setRouteBetween12] = useState<{ lat: number; lng: number }[] | null>(null);
+  const [route12Summary, setRoute12Summary] = useState<{
+    totalTimeSec?: number;
+    transferCount?: number;
+    totalFare?: number;
+  } | null>(null);
+  const [route12Error, setRoute12Error] = useState<string | null>(null);
+  const [route12Loading, setRoute12Loading] = useState(false);
 
   const requestIdRef = useRef(0);
   const firstInputRef = useRef<HTMLInputElement | null>(null);
@@ -287,6 +318,86 @@ export default function MeetMidpoint() {
       ) as (SelectedPlace & { rowIndex: number })[],
     [rows]
   );
+
+  const placeRow0 = rows[0]?.selected ?? null;
+  const placeRow1 = rows[1]?.selected ?? null;
+  const bothFirstTwoSelected = Boolean(placeRow0 && placeRow1);
+  const route12ForMap = bothFirstTwoSelected ? routeBetween12 : null;
+  const routeMidpoint12 = useMemo(
+    () => (route12ForMap && route12ForMap.length >= 2 ? routeMidpointByDistance(route12ForMap) : null),
+    [route12ForMap]
+  );
+
+  useEffect(() => {
+    if (!bothFirstTwoSelected || !placeRow0 || !placeRow1) return;
+
+    const ac = new AbortController();
+    const start = placeRow0;
+    const end = placeRow1;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        setRoute12Loading(true);
+        setRoute12Error(null);
+        try {
+          const res = await fetch("/api/tmap/transit/routes", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: ac.signal,
+            body: JSON.stringify({
+              startX: String(start.lng),
+              startY: String(start.lat),
+              endX: String(end.lng),
+              endY: String(end.lat),
+              count: 1,
+              lang: 0,
+            }),
+          });
+          const json = (await res.json()) as { ok?: boolean; data?: unknown; error?: string };
+          if (ac.signal.aborted) return;
+          if (!res.ok || !json.ok) {
+            setRouteBetween12(null);
+            setRoute12Summary(null);
+            setRoute12Error(json.error ?? `HTTP ${res.status}`);
+            setRoute12Loading(false);
+            return;
+          }
+          const coords = parseTmapTransitPath(json.data);
+          const summary = pickTmapTransitSummary(json.data);
+          if (coords.length < 2) {
+            setRouteBetween12(null);
+            setRoute12Summary(null);
+            setRoute12Error("대중교통 경로 좌표를 찾지 못했어요.");
+            setRoute12Loading(false);
+            return;
+          }
+          setRouteBetween12(coords);
+          setRoute12Summary(summary);
+        } catch (e) {
+          if (ac.signal.aborted) return;
+          setRouteBetween12(null);
+          setRoute12Summary(null);
+          setRoute12Error(e instanceof Error ? e.message : "오류");
+        } finally {
+          if (!ac.signal.aborted) setRoute12Loading(false);
+        }
+      })();
+    }, 400);
+
+    return () => {
+      ac.abort();
+      window.clearTimeout(timer);
+    };
+  }, [
+    bothFirstTwoSelected,
+    placeRow0?.id,
+    placeRow0?.lat,
+    placeRow0?.lng,
+    placeRow1?.id,
+    placeRow1?.lat,
+    placeRow1?.lng,
+    placeRow0,
+    placeRow1,
+  ]);
 
   const canRun = selectedPoints.length >= 2 && !modalOpen;
 
@@ -439,9 +550,7 @@ export default function MeetMidpoint() {
         <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 py-5">
           <div>
             <div className="text-lg font-semibold text-zinc-900">중간지점 찾기</div>
-            <div className="mt-1 text-sm text-zinc-600">
-              기본 지점은 강남역입니다.
-            </div>
+            <div className="mt-1 text-sm text-zinc-600">지도·검색·대중교통 경로는 TMAP API 기준입니다.</div>
           </div>
         </div>
       </header>
@@ -590,12 +699,46 @@ export default function MeetMidpoint() {
               </div>
             </div>
 
-            <KakaoMap
+            <TmapMap
               points={selectedPoints}
               midpoint={resultMidpoint}
               nearestSubway={midpointDetails.nearestSubway}
               showGangnamStartMarker={showGangnamStartMarker}
+              routeBetween12={route12ForMap}
+              routeMidpoint12={routeMidpoint12}
             />
+
+            {bothFirstTwoSelected ? (
+              <div className="mt-2 text-xs text-zinc-600" aria-live="polite">
+                {route12Loading ? (
+                  <span className="text-zinc-500">1↔2 TMAP 대중교통 경로 불러오는 중…</span>
+                ) : route12ForMap && route12ForMap.length >= 2 ? (
+                  <span className="font-medium text-sky-900">
+                    1↔2 대중교통 경로 표시
+                    {route12Summary != null &&
+                    (route12Summary.totalTimeSec != null ||
+                      route12Summary.transferCount != null ||
+                      route12Summary.totalFare != null)
+                      ? ` (${[
+                          route12Summary.totalTimeSec != null
+                            ? `약 ${Math.round(route12Summary.totalTimeSec / 60)}분`
+                            : null,
+                          route12Summary.transferCount != null
+                            ? `환승 ${route12Summary.transferCount}회`
+                            : null,
+                          route12Summary.totalFare != null
+                            ? `요금 약 ${route12Summary.totalFare}원`
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")})`
+                      : ""}
+                  </span>
+                ) : route12Error ? (
+                  <span className="text-amber-800">{route12Error}</span>
+                ) : null}
+              </div>
+            ) : null}
 
             {resultMidpoint ? (
               <div
@@ -639,7 +782,7 @@ export default function MeetMidpoint() {
           </section>
         </div>
 
-        <SeoulTransitExperimentPanel selectedPoints={selectedPoints} resultMidpoint={resultMidpoint} />
+        <TmapExperimentPanel selectedPoints={selectedPoints} resultMidpoint={resultMidpoint} />
       </main>
     </div>
   );

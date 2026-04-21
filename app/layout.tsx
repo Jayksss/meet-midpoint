@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import Script from "next/script";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -23,20 +22,26 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const kakaoAppKey = process.env.NEXT_PUBLIC_KAKAO_MAP_APP_KEY;
+  const tmapKey = process.env.NEXT_PUBLIC_TMAP_APP_KEY;
 
   return (
     <html
       lang="ko"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">
-        {kakaoAppKey ? (
-          <Script
-            src={`//dapi.kakao.com/v2/maps/sdk.js?appkey=${kakaoAppKey}&libraries=services&autoload=false`}
-            strategy="beforeInteractive"
+      <head>
+        {/* 
+          TMAP JS v2 SDK는 내부에서 document.write()를 사용합니다.
+          Next.js의 비동기 Script 주입과 충돌하므로, 초기 HTML에 동기 script로 삽입합니다.
+        */}
+        {tmapKey ? (
+          // eslint-disable-next-line @next/next/no-sync-scripts -- TMAP JS v2는 document.write 기반이라 동기 로드 필요
+          <script
+            src={`https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${tmapKey}`}
           />
         ) : null}
+      </head>
+      <body className="min-h-full flex flex-col">
         {children}
       </body>
     </html>
