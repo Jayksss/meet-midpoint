@@ -47,7 +47,7 @@ function summarizePathPayload(data: unknown): {
     const paths = toArray(pl).map((p) => {
       const pr = asRecord(p);
       return {
-        routeNm: pr.routeNm != null ? String(pr.routeNm) : pr.routeNm === 0 ? "0" : undefined,
+        routeNm: pr.routeNm != null ? String(pr.routeNm) : undefined,
         fname: pr.fname != null ? String(pr.fname) : undefined,
         tname: pr.tname != null ? String(pr.tname) : undefined,
       };
