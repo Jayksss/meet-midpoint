@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import KakaoMap, { type SelectedPlace } from "@/app/ui/KakaoMap";
+// import SeoulTransitExperimentPanel from "@/app/ui/SeoulTransitExperimentPanel";
 import ProgressModal from "@/app/ui/ProgressModal";
+import MobileMidpointResultModal from "@/app/ui/MobileMidpointResultModal";
 
 type Suggestion = {
   id: string;
@@ -34,7 +36,34 @@ type MidpointDetails = {
 };
 
 const MAX_TARGETS = 6;
+/** 모바일 판별·결과 모달 자동 닫힘 (max-width 기준은 Tailwind md 미만과 맞춤) */
+const MOBILE_MAX_WIDTH_PX = 768;
+const MOBILE_RESULT_AUTO_CLOSE_SEC = 10;
+
+function isMobileViewport(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.matchMedia(`(max-width: ${MOBILE_MAX_WIDTH_PX}px)`).matches;
+}
 const ROW_COLORS = ["#2563eb", "#7c3aed", "#db2777", "#ea580c", "#16a34a", "#0f766e"] as const;
+
+/** 로컬·개발에서만 1·2번 입력칸에 넣는 데모 검색어 */
+const DEV_DEMO_QUERY_1 = "을지로3가역 2호선";
+const DEV_DEMO_QUERY_2 = "가산디지털단지역 1호선";
+
+/** `npm run dev` 또는 배포 개발 환경(NEXT_PUBLIC_APP_ENV) */
+function isLocalOrDevLikeEnv(): boolean {
+  if (process.env.NODE_ENV === "development") return true;
+  const v = process.env.NEXT_PUBLIC_APP_ENV?.trim().toLowerCase();
+  if (!v) return false;
+  return v === "development" || v === "dev" || v === "local";
+}
+
+function applyDevDemoQueries(rows: RowState[]): RowState[] {
+  const next = [...rows];
+  next[0] = { ...next[0], query: DEV_DEMO_QUERY_1 };
+  next[1] = { ...next[1], query: DEV_DEMO_QUERY_2 };
+  return next;
+}
 
 function hexToRgba(hex: string, alpha: number) {
   const h = hex.replace("#", "");
@@ -47,13 +76,15 @@ function hexToRgba(hex: string, alpha: number) {
 }
 
 function createInitialRows(): RowState[] {
-  return Array.from({ length: MAX_TARGETS }, () => ({
+  const rows = Array.from({ length: MAX_TARGETS }, () => ({
     query: "",
     selected: null,
     suggestions: [],
     open: false,
     loading: false,
   }));
+  if (isLocalOrDevLikeEnv()) return applyDevDemoQueries(rows);
+  return rows;
 }
 
 function midpointOf(points: { lat: number; lng: number }[]) {
@@ -221,12 +252,32 @@ export default function MeetMidpoint() {
     address: null,
     nearestSubway: null,
   });
+  /** 중간지점 찾기 시작 전까지 강남역 기본 위치에 「시작」 마커 표시 */
+  const [showGangnamStartMarker, setShowGangnamStartMarker] = useState(true);
+  /** 모바일에서만: 찾기 완료 후 결과 요약 모달 */
+  const [mobileResultOpen, setMobileResultOpen] = useState(false);
 
   const requestIdRef = useRef(0);
   const firstInputRef = useRef<HTMLInputElement | null>(null);
+  const localhostDemoAppliedRef = useRef(false);
 
   useEffect(() => {
     firstInputRef.current?.focus();
+  }, []);
+
+  /** 프로덕션 빌드 + localhost(예: next start)에서만 보강 — 위와 중복 없음 */
+  useEffect(() => {
+    if (isLocalOrDevLikeEnv()) return;
+    if (localhostDemoAppliedRef.current) return;
+    const h = typeof window !== "undefined" ? window.location.hostname : "";
+    if (h !== "localhost" && h !== "127.0.0.1" && h !== "::1") return;
+    localhostDemoAppliedRef.current = true;
+    queueMicrotask(() => {
+      setRows((prev) => {
+        if (prev[0].query !== "" || prev[1].query !== "") return prev;
+        return applyDevDemoQueries(prev);
+      });
+    });
   }, []);
 
   const selectedPoints = useMemo(
@@ -326,6 +377,7 @@ export default function MeetMidpoint() {
 
   const run = useCallback(async () => {
     setError(null);
+    setMobileResultOpen(false);
     setResultMidpoint(null);
     setMidpointDetails({ address: null, nearestSubway: null });
 
@@ -335,6 +387,7 @@ export default function MeetMidpoint() {
       return;
     }
 
+    setShowGangnamStartMarker(false);
     setModalOpen(true);
     setModalMessage("장소 좌표를 수집 중…");
     await sleep(450);
@@ -359,6 +412,10 @@ export default function MeetMidpoint() {
     setModalMessage("완료!");
     await sleep(250);
     setModalOpen(false);
+
+    if (mid && isMobileViewport()) {
+      setMobileResultOpen(true);
+    }
   }, [rows]);
 
   return (
@@ -370,15 +427,20 @@ export default function MeetMidpoint() {
     >
       <ProgressModal open={modalOpen} title="중간지점 찾는 중" message={modalMessage} />
 
+      <MobileMidpointResultModal
+        open={mobileResultOpen}
+        onClose={() => setMobileResultOpen(false)}
+        autoCloseSeconds={MOBILE_RESULT_AUTO_CLOSE_SEC}
+        resultMidpoint={resultMidpoint}
+        midpointDetails={midpointDetails}
+      />
+
       <header className="border-b border-zinc-200 bg-white">
         <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 py-5">
           <div>
             <div className="text-lg font-semibold text-zinc-900">중간지점 찾기</div>
             <div className="mt-1 text-sm text-zinc-600">
-              최대 6개 장소를 입력하고 중간지점을 찾아요.
-              <span className="mt-1 block text-xs text-zinc-500">
-                지도는 기본으로 강남역을 중심으로 시작합니다.
-              </span>
+              기본 지점은 강남역입니다.
             </div>
           </div>
         </div>
@@ -505,7 +567,7 @@ export default function MeetMidpoint() {
             </button>
 
             <div className="mt-4 text-xs leading-6 text-zinc-500">
-              최소 2개 이상의 장소를 선택해야 중간지점을 찾을 수 있어요.
+              최소 2개 이상의 장소를 선택해야 중간지점을 찾을 수 있습니다.
             </div>
           </section>
 
@@ -532,10 +594,13 @@ export default function MeetMidpoint() {
               points={selectedPoints}
               midpoint={resultMidpoint}
               nearestSubway={midpointDetails.nearestSubway}
+              showGangnamStartMarker={showGangnamStartMarker}
             />
 
             {resultMidpoint ? (
-              <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+              <div
+                className={`rounded-2xl border border-zinc-200 bg-white p-4${mobileResultOpen ? " max-md:hidden" : ""}`}
+              >
                 <div className="grid grid-cols-1 gap-3 text-sm text-zinc-800 sm:grid-cols-2">
                   <div className="flex flex-col gap-1">
                     <div className="text-xs font-semibold text-zinc-500">중간지점 주소</div>
@@ -573,6 +638,8 @@ export default function MeetMidpoint() {
             ) : null}
           </section>
         </div>
+
+        {/*<SeoulTransitExperimentPanel selectedPoints={selectedPoints} resultMidpoint={resultMidpoint} />*/}
       </main>
     </div>
   );
