@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import KakaoMap, { type SelectedPlace } from "@/app/ui/KakaoMap";
-// import SeoulTransitExperimentPanel from "@/app/ui/SeoulTransitExperimentPanel";
+import SeoulTransitExperimentPanel from "@/app/ui/SeoulTransitExperimentPanel";
 import ProgressModal from "@/app/ui/ProgressModal";
 import MobileMidpointResultModal from "@/app/ui/MobileMidpointResultModal";
 
@@ -639,7 +639,7 @@ export default function MeetMidpoint() {
           </section>
         </div>
 
-        {/*<SeoulTransitExperimentPanel selectedPoints={selectedPoints} resultMidpoint={resultMidpoint} />*/}
+        <SeoulTransitExperimentPanel selectedPoints={selectedPoints} resultMidpoint={resultMidpoint} />
       </main>
     </div>
   );
