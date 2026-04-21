@@ -24,3 +24,15 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/*
+ * 모바일에서 input 포커스 시 브라우저 자동 줌 방지 (글자 높이 ≥ 16px 권장).
+ * viewport에 user-scalable=no 를 넣지 않아 두 손가락 핀치 줌은 그대로 가능.
+ */
+@media (max-width: 768px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}

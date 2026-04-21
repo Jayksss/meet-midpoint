@@ -470,7 +470,7 @@ export default function MeetMidpoint() {
                       }
                       placeholder="장소/주소 키워드 입력"
                       className={[
-                        "h-10 w-full rounded-xl border px-3 text-sm text-zinc-900 outline-none",
+                        "h-10 w-full rounded-xl border px-3 text-base text-zinc-900 outline-none md:text-sm",
                         row.selected
                           ? "focus:border-zinc-400"
                           : "border-zinc-200 bg-white focus:border-zinc-400",
