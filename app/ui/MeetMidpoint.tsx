@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import TmapMap, { type SelectedPlace } from "@/app/ui/TmapMap";
+import KakaoMap from "@/app/ui/KakaoMap";
+import type { SelectedPlace } from "@/app/ui/mapTypes";
 import TmapExperimentPanel from "@/app/ui/TmapExperimentPanel";
 import { parseTmapTransitPath, pickTmapTransitSummary } from "@/lib/tmap-transit-path-parse";
 import ProgressModal from "@/app/ui/ProgressModal";
@@ -328,77 +329,6 @@ export default function MeetMidpoint() {
     [route12ForMap]
   );
 
-  useEffect(() => {
-    if (!bothFirstTwoSelected || !placeRow0 || !placeRow1) return;
-
-    const ac = new AbortController();
-    const start = placeRow0;
-    const end = placeRow1;
-    const timer = window.setTimeout(() => {
-      void (async () => {
-        setRoute12Loading(true);
-        setRoute12Error(null);
-        try {
-          const res = await fetch("/api/tmap/transit/routes", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            signal: ac.signal,
-            body: JSON.stringify({
-              startX: String(start.lng),
-              startY: String(start.lat),
-              endX: String(end.lng),
-              endY: String(end.lat),
-              count: 1,
-              lang: 0,
-            }),
-          });
-          const json = (await res.json()) as { ok?: boolean; data?: unknown; error?: string };
-          if (ac.signal.aborted) return;
-          if (!res.ok || !json.ok) {
-            setRouteBetween12(null);
-            setRoute12Summary(null);
-            setRoute12Error(json.error ?? `HTTP ${res.status}`);
-            setRoute12Loading(false);
-            return;
-          }
-          const coords = parseTmapTransitPath(json.data);
-          const summary = pickTmapTransitSummary(json.data);
-          if (coords.length < 2) {
-            setRouteBetween12(null);
-            setRoute12Summary(null);
-            setRoute12Error("대중교통 경로 좌표를 찾지 못했어요.");
-            setRoute12Loading(false);
-            return;
-          }
-          setRouteBetween12(coords);
-          setRoute12Summary(summary);
-        } catch (e) {
-          if (ac.signal.aborted) return;
-          setRouteBetween12(null);
-          setRoute12Summary(null);
-          setRoute12Error(e instanceof Error ? e.message : "오류");
-        } finally {
-          if (!ac.signal.aborted) setRoute12Loading(false);
-        }
-      })();
-    }, 400);
-
-    return () => {
-      ac.abort();
-      window.clearTimeout(timer);
-    };
-  }, [
-    bothFirstTwoSelected,
-    placeRow0?.id,
-    placeRow0?.lat,
-    placeRow0?.lng,
-    placeRow1?.id,
-    placeRow1?.lat,
-    placeRow1?.lng,
-    placeRow0,
-    placeRow1,
-  ]);
-
   const canRun = selectedPoints.length >= 2 && !modalOpen;
 
   const onChangeQuery = useCallback((idx: number, value: string) => {
@@ -416,6 +346,11 @@ export default function MeetMidpoint() {
   }, []);
 
   const onPickSuggestion = useCallback((idx: number, s: Suggestion) => {
+    if (idx === 0 || idx === 1) {
+      setRouteBetween12(null);
+      setRoute12Summary(null);
+      setRoute12Error(null);
+    }
     setRows((prev) => {
       const next = [...prev];
       next[idx] = {
@@ -431,6 +366,11 @@ export default function MeetMidpoint() {
   }, []);
 
   const clearRow = useCallback((idx: number) => {
+    if (idx === 0 || idx === 1) {
+      setRouteBetween12(null);
+      setRoute12Summary(null);
+      setRoute12Error(null);
+    }
     setRows((prev) => {
       const next = [...prev];
       next[idx] = { ...next[idx], query: "", selected: null, suggestions: [], open: false };
@@ -491,6 +431,9 @@ export default function MeetMidpoint() {
     setMobileResultOpen(false);
     setResultMidpoint(null);
     setMidpointDetails({ address: null, nearestSubway: null });
+    setRouteBetween12(null);
+    setRoute12Summary(null);
+    setRoute12Error(null);
 
     const points = rows.map((r) => r.selected).filter(Boolean) as SelectedPlace[];
     if (points.length < 2) {
@@ -503,16 +446,63 @@ export default function MeetMidpoint() {
     setModalMessage("장소 좌표를 수집 중…");
     await sleep(450);
     setModalMessage("중간지점을 계산 중…");
-    await sleep(450);
+    await sleep(350);
 
-    const mid = midpointOf(points);
-    setResultMidpoint(mid);
+    const start12 = rows[0]?.selected ?? null;
+    const end12 = rows[1]?.selected ?? null;
+    let chosenMid: { lat: number; lng: number } | null = midpointOf(points);
 
-    if (mid) {
-      setModalMessage("중간지점 주소/가까운 역을 찾는 중…");
+    if (start12 && end12) {
+      setModalMessage("1↔2 대중교통 경로를 불러오는 중…");
+      setRoute12Loading(true);
+      try {
+        const res = await fetch("/api/tmap/transit/routes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            startX: String(start12.lng),
+            startY: String(start12.lat),
+            endX: String(end12.lng),
+            endY: String(end12.lat),
+            count: 1,
+            lang: 0,
+          }),
+        });
+        const json = (await res.json()) as { ok?: boolean; data?: unknown; error?: string };
+        if (!res.ok || !json.ok) {
+          setRouteBetween12(null);
+          setRoute12Summary(null);
+          setRoute12Error(json.error ?? `HTTP ${res.status}`);
+        } else {
+          const coords = parseTmapTransitPath(json.data);
+          const summary = pickTmapTransitSummary(json.data);
+          if (coords.length < 2) {
+            setRouteBetween12(null);
+            setRoute12Summary(null);
+            setRoute12Error("대중교통 경로 좌표를 찾지 못했어요.");
+          } else {
+            setRouteBetween12(coords);
+            setRoute12Summary(summary);
+            const transitMid = routeMidpointByDistance(coords);
+            if (transitMid) chosenMid = transitMid;
+          }
+        }
+      } catch (e) {
+        setRouteBetween12(null);
+        setRoute12Summary(null);
+        setRoute12Error(e instanceof Error ? e.message : "오류");
+      } finally {
+        setRoute12Loading(false);
+      }
+    }
+
+    setResultMidpoint(chosenMid);
+
+    if (chosenMid) {
+      setModalMessage("중간지점(대중교통 기준) 주소/가까운 역을 찾는 중…");
       const [address, nearestSubway] = await Promise.all([
-        reverseGeocode(mid.lat, mid.lng),
-        nearestSubwayStation(mid.lat, mid.lng),
+        reverseGeocode(chosenMid.lat, chosenMid.lng),
+        nearestSubwayStation(chosenMid.lat, chosenMid.lng),
       ]);
       setMidpointDetails({ address, nearestSubway });
       await sleep(250);
@@ -524,7 +514,7 @@ export default function MeetMidpoint() {
     await sleep(250);
     setModalOpen(false);
 
-    if (mid && isMobileViewport()) {
+    if (chosenMid && isMobileViewport()) {
       setMobileResultOpen(true);
     }
   }, [rows]);
@@ -550,7 +540,9 @@ export default function MeetMidpoint() {
         <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 py-5">
           <div>
             <div className="text-lg font-semibold text-zinc-900">중간지점 찾기</div>
-            <div className="mt-1 text-sm text-zinc-600">지도·검색·대중교통 경로는 TMAP API 기준입니다.</div>
+            <div className="mt-1 text-sm text-zinc-600">
+              지도는 카카오지도, 검색·대중교통 경로는 TMAP API 기준입니다.
+            </div>
           </div>
         </div>
       </header>
@@ -699,7 +691,7 @@ export default function MeetMidpoint() {
               </div>
             </div>
 
-            <TmapMap
+            <KakaoMap
               points={selectedPoints}
               midpoint={resultMidpoint}
               nearestSubway={midpointDetails.nearestSubway}
@@ -742,7 +734,7 @@ export default function MeetMidpoint() {
 
             {resultMidpoint ? (
               <div
-                className={`rounded-2xl border border-zinc-200 bg-white p-4${mobileResultOpen ? " max-md:hidden" : ""}`}
+                className="rounded-2xl border border-zinc-200 bg-white p-4"
               >
                 <div className="grid grid-cols-1 gap-3 text-sm text-zinc-800 sm:grid-cols-2">
                   <div className="flex flex-col gap-1">

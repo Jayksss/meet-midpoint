@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import type { MapPoint } from "@/app/ui/TmapMap";
+import type { MapPoint } from "@/app/ui/mapTypes";
 
 export default function TmapExperimentPanel({
   selectedPoints,
