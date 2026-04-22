@@ -231,6 +231,24 @@ export default function KakaoMap({
 
     const boundsPts: { lat: number; lng: number }[] = [];
 
+    // 대상 장소를 모두 지운 경우:
+    // - 지도 위 마커/경로는 모두 제거(위에서 이미 제거)
+    // - 마지막으로 계산된 "가까운 지하철역" 위치로 센터 고정 + 기본 줌
+    if (sortedPoints.length === 0) {
+      const center = nearestSubway ? { lat: nearestSubway.lat, lng: nearestSubway.lng } : DEFAULT_MAP_CENTER;
+      const fitKey = JSON.stringify({
+        empty: true,
+        center: [+center.lat.toFixed(6), +center.lng.toFixed(6)],
+        level: DEFAULT_LEVEL,
+      });
+      if (lastFitKeyRef.current !== fitKey) {
+        map.setCenter(new maps.LatLng(center.lat, center.lng));
+        map.setLevel(DEFAULT_LEVEL);
+        lastFitKeyRef.current = fitKey;
+      }
+      return;
+    }
+
     if (showGangnamStartMarker) {
       boundsPts.push(DEFAULT_MAP_CENTER);
       addMarker(
