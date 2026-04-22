@@ -17,12 +17,14 @@ export default function MobileMidpointResultModal({
   autoCloseSeconds,
   resultMidpoint,
   midpointDetails,
+  notice,
 }: {
   open: boolean;
   onClose: () => void;
   autoCloseSeconds: number;
   resultMidpoint: { lat: number; lng: number } | null;
   midpointDetails: MidpointDetails;
+  notice?: string | null;
 }) {
   const [remaining, setRemaining] = useState(autoCloseSeconds);
 
@@ -82,6 +84,12 @@ export default function MobileMidpointResultModal({
             midpoint: {resultMidpoint.lat.toFixed(5)}, {resultMidpoint.lng.toFixed(5)}
           </div>
 
+          {notice ? (
+            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+              {notice}
+            </div>
+          ) : null}
+
           <div className="mt-3 flex flex-col gap-1">
             <div className="text-xs font-semibold text-zinc-500">중간지점 주소</div>
             <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2">
@@ -100,11 +108,6 @@ export default function MobileMidpointResultModal({
                     <span className="font-semibold text-zinc-900">
                       {midpointDetails.nearestSubway.name}
                     </span>
-                    {midpointDetails.nearestSubway.distanceM != null ? (
-                      <span className="text-xs text-zinc-600">
-                        {Math.round(midpointDetails.nearestSubway.distanceM)}m
-                      </span>
-                    ) : null}
                   </div>
                   <div className="text-xs text-zinc-600">{midpointDetails.nearestSubway.address}</div>
                 </div>

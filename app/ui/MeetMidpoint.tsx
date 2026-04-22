@@ -328,6 +328,7 @@ export default function MeetMidpoint() {
   } | null>(null);
   const [route12Error, setRoute12Error] = useState<string | null>(null);
   const [route12Loading, setRoute12Loading] = useState(false);
+  const [route12FallbackNotice, setRoute12FallbackNotice] = useState<string | null>(null);
 
   const requestIdRef = useRef(0);
   const firstInputRef = useRef<HTMLInputElement | null>(null);
@@ -474,6 +475,7 @@ export default function MeetMidpoint() {
     setRouteBetween12(null);
     setRoute12Summary(null);
     setRoute12Error(null);
+    setRoute12FallbackNotice(null);
 
     const points = rows.map((r) => r.selected).filter(Boolean) as SelectedPlace[];
     if (points.length < 2) {
@@ -508,11 +510,24 @@ export default function MeetMidpoint() {
             lang: 0,
           }),
         });
-        const json = (await res.json()) as { ok?: boolean; data?: unknown; error?: string };
+        const json = (await res.json()) as {
+          ok?: boolean;
+          data?: unknown;
+          error?: string;
+          upstreamStatus?: number;
+        };
         if (!res.ok || !json.ok) {
           setRouteBetween12(null);
           setRoute12Summary(null);
-          setRoute12Error(json.error ?? `HTTP ${res.status}`);
+          const is429 = res.status === 429 || json.upstreamStatus === 429 || String(json.error ?? "").includes("429");
+          if (is429) {
+            const msg =
+              "TMAP 대중교통 길찾기 API 사용량이 초과되어(429) 대중교통 경로 기반 계산을 사용할 수 없어요. 대신 직선거리 기준 중간지점으로 대체해 표시합니다.";
+            setRoute12Error(msg);
+            setRoute12FallbackNotice(msg);
+          } else {
+            setRoute12Error(json.error ?? `HTTP ${res.status}`);
+          }
         } else {
           const coords = parseTmapTransitPath(json.data);
           const summary = pickTmapTransitSummary(json.data);
@@ -574,6 +589,7 @@ export default function MeetMidpoint() {
         autoCloseSeconds={MOBILE_RESULT_AUTO_CLOSE_SEC}
         resultMidpoint={resultMidpoint}
         midpointDetails={midpointDetails}
+        notice={route12FallbackNotice}
       />
 
       <header className="border-b border-zinc-200 bg-white">
@@ -766,7 +782,7 @@ export default function MeetMidpoint() {
                           .join(" · ")})`
                       : ""}
                   </span>
-                ) : route12Error ? (
+                ) : route12Error && !route12FallbackNotice ? (
                   <span className="text-amber-800">{route12Error}</span>
                 ) : null}
               </div>
@@ -776,6 +792,11 @@ export default function MeetMidpoint() {
               <div
                 className="rounded-2xl border border-zinc-200 bg-white p-4"
               >
+                {route12FallbackNotice ? (
+                  <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+                    {route12FallbackNotice}
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-1 gap-3 text-sm text-zinc-800 sm:grid-cols-2">
                   <div className="flex flex-col gap-1">
                     <div className="text-xs font-semibold text-zinc-500">중간지점 주소</div>
