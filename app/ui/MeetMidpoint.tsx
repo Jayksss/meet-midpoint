@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import KakaoMap from "@/app/ui/KakaoMap";
 import type { SelectedPlace } from "@/app/ui/mapTypes";
-import TmapExperimentPanel from "@/app/ui/TmapExperimentPanel";
 import { parseTmapTransitPath, pickTmapTransitSummary } from "@/lib/tmap-transit-path-parse";
 import ProgressModal from "@/app/ui/ProgressModal";
 import MobileMidpointResultModal from "@/app/ui/MobileMidpointResultModal";
@@ -37,7 +36,8 @@ type MidpointDetails = {
     | null;
 };
 
-const MAX_TARGETS = 6;
+// 현재 버전은 1↔2 대중교통 경로 기반만 지원
+const MAX_TARGETS = 2;
 /** 모바일 판별·결과 모달 자동 닫힘 (max-width 기준은 Tailwind md 미만과 맞춤) */
 const MOBILE_MAX_WIDTH_PX = 768;
 const MOBILE_RESULT_AUTO_CLOSE_SEC = 10;
@@ -212,14 +212,54 @@ async function keywordSearch(query: string): Promise<Suggestion[]> {
 }
 
 function pickReverseGeocodeAddress(data: unknown): string | null {
+  const pickRoadAddress = (raw: string): string => {
+    const s = raw.trim();
+    if (!s) return "";
+    const parts = s
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (parts.length <= 1) return s;
+
+    // 도로명주소 후보: "…로/…길/…대로" + 번지(숫자) 패턴을 우선
+    const roadRe = /(?:로|길|대로)\s*\d+/;
+    const road =
+      [...parts].reverse().find((p) => roadRe.test(p)) ??
+      [...parts].reverse().find((p) => /(?:로|길|대로)\b/.test(p)) ??
+      "";
+    return road || parts[parts.length - 1] || s;
+  };
+
   const d = asRecord(data);
   const ai = asRecord(d.addressInfo);
-  const full = asRecord(ai.fullAddress);
-  const fromFull =
-    pickString(full, ["address", "addressName"]) ||
-    pickString(ai, ["legalAddress", "roadAddress", "address"]);
-  if (fromFull) return fromFull;
-  return pickString(ai, ["address", "legalAddress", "roadAddress"]) || null;
+  const fa = ai.fullAddress;
+  if (typeof fa === "string" && fa.trim()) return pickRoadAddress(fa);
+
+  const full = asRecord(fa);
+  const fromFull = pickString(full, ["address", "addressName", "fullAddress"]);
+  if (fromFull) return pickRoadAddress(fromFull);
+
+  const fromInfo = pickString(ai, [
+    "fullAddress",
+    "address",
+    "roadAddress",
+    "legalAddress",
+    "city_do",
+    "gu_gun",
+    "eup_myun",
+    "adminDong",
+    "legalDong",
+  ]);
+  if (fromInfo) return pickRoadAddress(fromInfo);
+
+  // 일부 응답은 `addressInfo`가 아니라 `address`/`newAddress`로 내려올 수 있음
+  const addr = asRecord(d.address);
+  const newAddr = asRecord(d.newAddress);
+  const fromAddr = pickString(addr, ["fullAddress", "address"]);
+  if (fromAddr) return pickRoadAddress(fromAddr);
+  const fromNewAddr = pickString(newAddr, ["fullAddress", "address"]);
+  if (fromNewAddr) return pickRoadAddress(fromNewAddr);
+  return null;
 }
 
 async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
@@ -541,7 +581,7 @@ export default function MeetMidpoint() {
           <div>
             <div className="text-lg font-semibold text-zinc-900">중간지점 찾기</div>
             <div className="mt-1 text-sm text-zinc-600">
-              지도는 카카오지도, 검색·대중교통 경로는 TMAP API 기준입니다.
+              {/*지도는 카카오지도, 검색·대중교통 경로는 TMAP API 기준입니다.*/}
             </div>
           </div>
         </div>
@@ -550,7 +590,7 @@ export default function MeetMidpoint() {
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[360px_1fr]">
           <section className="rounded-2xl border border-zinc-200 bg-white p-4">
-            <div className="text-sm font-semibold text-zinc-900">대상 장소 (최대 6개)</div>
+            <div className="text-sm font-semibold text-zinc-900">대상 장소 (2개)</div>
             <div className="mt-3 flex flex-col gap-3">
               {rows.map((row, idx) => (
                 <div key={idx} className="relative">
@@ -754,11 +794,6 @@ export default function MeetMidpoint() {
                           <div className="font-semibold text-zinc-900">
                             {midpointDetails.nearestSubway.name}
                           </div>
-                          <div className="text-xs text-zinc-600">
-                            {midpointDetails.nearestSubway.distanceM != null
-                              ? `${Math.round(midpointDetails.nearestSubway.distanceM)}m`
-                              : null}
-                          </div>
                           <div className="w-full text-xs text-zinc-600">
                             {midpointDetails.nearestSubway.address}
                           </div>
@@ -774,7 +809,6 @@ export default function MeetMidpoint() {
           </section>
         </div>
 
-        <TmapExperimentPanel selectedPoints={selectedPoints} resultMidpoint={resultMidpoint} />
       </main>
     </div>
   );

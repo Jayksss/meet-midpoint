@@ -5,13 +5,15 @@ import type { MapPoint } from "@/app/ui/mapTypes";
 import { DEFAULT_MAP_CENTER } from "@/app/ui/mapTypes";
 
 const POINT_COLORS = ["#2563eb", "#7c3aed", "#db2777", "#ea580c", "#16a34a", "#0f766e"] as const;
-const START_MARKER_COLOR = "#52525b";
 const TRANSIT_ROUTE_COLOR = "#0284c7";
 // Kakao 지도 level: 숫자가 클수록 더 넓게(줌 아웃)
-const DEFAULT_LEVEL = 7;
-const MARKER_PX = 44;
-const MARKER_OFFSET_X = Math.round(MARKER_PX / 2);
-const MARKER_OFFSET_Y = MARKER_PX;
+const DEFAULT_LEVEL = 8;
+const PLACE_MARKER_PX = 30;
+const PLACE_MARKER_OFFSET_X = Math.round(PLACE_MARKER_PX / 2);
+const PLACE_MARKER_OFFSET_Y = PLACE_MARKER_PX;
+const PIN_MARKER_PX = 44;
+const PIN_MARKER_OFFSET_X = Math.round(PIN_MARKER_PX / 2);
+const PIN_MARKER_OFFSET_Y = PIN_MARKER_PX;
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -26,12 +28,34 @@ async function waitForKakaoSdk() {
 }
 
 function svgMarkerDataUrl(color: string, text: string): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${MARKER_PX}" height="${MARKER_PX}" viewBox="0 0 30 30"><circle cx="15" cy="15" r="12" fill="${color}" stroke="#fff" stroke-width="2"/><text x="15" y="19" font-size="12" fill="white" text-anchor="middle" font-weight="800" font-family="system-ui,sans-serif">${text}</text></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${PLACE_MARKER_PX}" height="${PLACE_MARKER_PX}" viewBox="0 0 30 30"><circle cx="15" cy="15" r="12" fill="${color}" stroke="#fff" stroke-width="2"/><text x="15" y="19" font-size="12" fill="white" text-anchor="middle" font-weight="800" font-family="system-ui,sans-serif">${text}</text></svg>`;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function svgStartMarkerDataUrl(): string {
+  const w = 72;
+  const h = 34;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#6366f1"/>
+    </linearGradient>
+    <filter id="s" x="-30%" y="-50%" width="160%" height="220%">
+      <feDropShadow dx="0" dy="3" stdDeviation="2.2" flood-color="#000" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+  <g filter="url(#s)">
+    <rect x="2" y="2" width="${w - 4}" height="${h - 10}" rx="16" fill="url(#g)" stroke="#ffffff" stroke-width="2"/>
+    <path d="M${Math.round(w / 2) - 7} ${h - 8} L${Math.round(w / 2)} ${h - 1} L${Math.round(w / 2) + 7} ${h - 8} Z" fill="url(#g)" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/>
+    <text x="${Math.round(w / 2)}" y="20" font-size="13" fill="#ffffff" text-anchor="middle" font-weight="900" font-family="system-ui,sans-serif">시작</text>
+  </g>
+  </svg>`;
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 }
 
 function svgFlagMarkerDataUrl(): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${MARKER_PX}" height="${MARKER_PX}" viewBox="0 0 48 48">
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${PIN_MARKER_PX}" height="${PIN_MARKER_PX}" viewBox="0 0 48 48">
   <defs>
     <filter id="s" x="-30%" y="-30%" width="160%" height="160%">
       <feDropShadow dx="0" dy="2" stdDeviation="1.6" flood-color="#000" flood-opacity="0.25"/>
@@ -50,7 +74,7 @@ function svgFlagMarkerDataUrl(): string {
 }
 
 function svgSubwayMarkerDataUrl(): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${MARKER_PX}" height="${MARKER_PX}" viewBox="0 0 48 48">
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${PIN_MARKER_PX}" height="${PIN_MARKER_PX}" viewBox="0 0 48 48">
   <defs>
     <filter id="s" x="-30%" y="-30%" width="160%" height="160%">
       <feDropShadow dx="0" dy="2" stdDeviation="1.6" flood-color="#000" flood-opacity="0.25"/>
@@ -75,6 +99,12 @@ function fitMapToPoints(
   maps: NonNullable<NonNullable<typeof window.kakao>["maps"]>
 ) {
   if (pts.length === 0) return;
+  // 단일 포인트에 setBounds를 쓰면 과하게 확대되는 경우가 있어 level 고정
+  if (pts.length === 1) {
+    map.setCenter(new maps.LatLng(pts[0].lat, pts[0].lng));
+    map.setLevel(DEFAULT_LEVEL);
+    return;
+  }
   const bounds = new maps.LatLngBounds();
   for (const p of pts) bounds.extend(new maps.LatLng(p.lat, p.lng));
   if (typeof map.setBounds === "function") {
@@ -165,9 +195,17 @@ export default function KakaoMap({
     for (const p of polylinesRef.current) p.setMap(null);
     polylinesRef.current = [];
 
-    const addMarker = (lat: number, lng: number, iconUrl: string) => {
-      const image = new maps.MarkerImage(iconUrl, new maps.Size(MARKER_PX, MARKER_PX), {
-        offset: new maps.Point(MARKER_OFFSET_X, MARKER_OFFSET_Y),
+    const addMarker = (
+      lat: number,
+      lng: number,
+      iconUrl: string,
+      widthPx: number,
+      heightPx: number,
+      offsetX: number,
+      offsetY: number
+    ) => {
+      const image = new maps.MarkerImage(iconUrl, new maps.Size(widthPx, heightPx), {
+        offset: new maps.Point(offsetX, offsetY),
       });
       const marker = new maps.Marker({
         position: new maps.LatLng(lat, lng),
@@ -195,13 +233,29 @@ export default function KakaoMap({
 
     if (showGangnamStartMarker) {
       boundsPts.push(DEFAULT_MAP_CENTER);
-      addMarker(DEFAULT_MAP_CENTER.lat, DEFAULT_MAP_CENTER.lng, svgMarkerDataUrl(START_MARKER_COLOR, "◎"));
+      addMarker(
+        DEFAULT_MAP_CENTER.lat,
+        DEFAULT_MAP_CENTER.lng,
+        svgStartMarkerDataUrl(),
+        72,
+        34,
+        36,
+        34
+      );
     }
 
     for (const p of sortedPoints) {
       boundsPts.push({ lat: p.lat, lng: p.lng });
       const color = POINT_COLORS[p.rowIndex] ?? "#111827";
-      addMarker(p.lat, p.lng, svgMarkerDataUrl(color, String(p.rowIndex + 1)));
+      addMarker(
+        p.lat,
+        p.lng,
+        svgMarkerDataUrl(color, String(p.rowIndex + 1)),
+        PLACE_MARKER_PX,
+        PLACE_MARKER_PX,
+        PLACE_MARKER_OFFSET_X,
+        PLACE_MARKER_OFFSET_Y
+      );
     }
 
     const hasTransit =
@@ -233,12 +287,28 @@ export default function KakaoMap({
 
     if (midpoint) {
       boundsPts.push(midpoint);
-      addMarker(midpoint.lat, midpoint.lng, svgFlagMarkerDataUrl());
+      addMarker(
+        midpoint.lat,
+        midpoint.lng,
+        svgFlagMarkerDataUrl(),
+        PIN_MARKER_PX,
+        PIN_MARKER_PX,
+        PIN_MARKER_OFFSET_X,
+        PIN_MARKER_OFFSET_Y
+      );
     }
 
     if (nearestSubway) {
       boundsPts.push({ lat: nearestSubway.lat, lng: nearestSubway.lng });
-      addMarker(nearestSubway.lat, nearestSubway.lng, svgSubwayMarkerDataUrl());
+      addMarker(
+        nearestSubway.lat,
+        nearestSubway.lng,
+        svgSubwayMarkerDataUrl(),
+        PIN_MARKER_PX,
+        PIN_MARKER_PX,
+        PIN_MARKER_OFFSET_X,
+        PIN_MARKER_OFFSET_Y
+      );
     }
 
     const fitKey = JSON.stringify({
