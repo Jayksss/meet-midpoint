@@ -204,20 +204,30 @@ function normalizeTmapPoi(item: unknown): Suggestion | null {
   };
 }
 
+function normalizeKakaoKeywordDoc(item: unknown): Suggestion | null {
+  const rec = asRecord(item);
+  const label = pickString(rec, ["place_name", "placeName", "name"]);
+  const address = pickString(rec, ["road_address_name", "roadAddressName", "address_name", "addressName", "address"]);
+  const lng = pickNumber(rec, "x");
+  const lat = pickNumber(rec, "y");
+  if (!label || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return {
+    id: pickString(rec, ["id"]) || `${label}-${lat},${lng}`,
+    label,
+    address,
+    lat,
+    lng,
+  };
+}
+
 async function keywordSearch(query: string): Promise<Suggestion[]> {
-  const qs = new URLSearchParams({
-    searchKeyword: query,
-    count: "8",
-    page: "1",
-  });
-  const res = await fetch(`/api/tmap/pois?${qs}`);
+  const qs = new URLSearchParams({ query, size: "8", page: "1" });
+  const res = await fetch(`/api/kakao/keyword?${qs}`);
   const json = (await res.json()) as { ok?: boolean; data?: unknown };
   if (!res.ok || !json.ok || !json.data) return [];
   const data = asRecord(json.data);
-  const spi = asRecord(data.searchPoiInfo);
-  const pois = asRecord(spi.pois);
-  const list = toArray(pois.poi);
-  return list.map(normalizeTmapPoi).filter((s): s is Suggestion => s != null);
+  const docs = toArray(data.documents);
+  return docs.map(normalizeKakaoKeywordDoc).filter((s): s is Suggestion => s != null);
 }
 
 function pickReverseGeocodeAddress(data: unknown): string | null {
