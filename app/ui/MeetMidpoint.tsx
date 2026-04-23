@@ -36,8 +36,17 @@ type MidpointDetails = {
     | null;
 };
 
-// 현재 버전은 1↔2 대중교통 경로 기반만 지원
-const MAX_TARGETS = 2;
+type RankedCandidate = {
+  place: Suggestion;
+  timesMin: number[];
+  maxTimeMin: number;
+  totalTimeMin: number;
+  avgTimeMin: number;
+  score: number;
+};
+
+const MAX_TARGETS = 4;
+const MAX_CANDIDATES = 10;
 /** 모바일 판별·결과 모달 자동 닫힘 (max-width 기준은 Tailwind md 미만과 맞춤) */
 const MOBILE_MAX_WIDTH_PX = 768;
 const MOBILE_RESULT_AUTO_CLOSE_SEC = 10;
@@ -303,6 +312,71 @@ async function nearestSubwayStation(
   };
 }
 
+function dedupeSuggestions(list: Suggestion[]): Suggestion[] {
+  const seen = new Set<string>();
+  const out: Suggestion[] = [];
+  for (const s of list) {
+    const key = `${s.id}::${s.label}::${s.lat.toFixed(6)},${s.lng.toFixed(6)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
+}
+
+async function nearbySuggestions(
+  center: { lat: number; lng: number },
+  opts: { keyword: string; radiusKm: number; count: number }
+): Promise<Suggestion[]> {
+  const qs = new URLSearchParams({
+    searchKeyword: opts.keyword,
+    centerLat: String(center.lat),
+    centerLon: String(center.lng),
+    radius: String(opts.radiusKm),
+    searchtypCd: "R",
+    count: String(opts.count),
+  });
+  const res = await fetch(`/api/tmap/pois?${qs}`);
+  const json = (await res.json()) as { ok?: boolean; data?: unknown };
+  if (!res.ok || !json.ok || !json.data) return [];
+  const data = asRecord(json.data);
+  const spi = asRecord(data.searchPoiInfo);
+  const pois = asRecord(spi.pois);
+  const list = toArray(pois.poi);
+  return list.map(normalizeTmapPoi).filter((s): s is Suggestion => s != null);
+}
+
+async function transitTimeMinutes(start: { lat: number; lng: number }, end: { lat: number; lng: number }) {
+  const res = await fetch("/api/tmap/transit/routes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      startX: String(start.lng),
+      startY: String(start.lat),
+      endX: String(end.lng),
+      endY: String(end.lat),
+      count: 1,
+      lang: 0,
+    }),
+  });
+  const json = (await res.json()) as {
+    ok?: boolean;
+    data?: unknown;
+    error?: string;
+    upstreamStatus?: number;
+  };
+  if (!res.ok || !json.ok) {
+    const is429 = res.status === 429 || json.upstreamStatus === 429 || String(json.error ?? "").includes("429");
+    return { ok: false as const, is429, error: json.error ?? `HTTP ${res.status}` };
+  }
+  const summary = pickTmapTransitSummary(json.data);
+  const sec = summary.totalTimeSec;
+  if (sec == null || !Number.isFinite(sec) || sec <= 0) {
+    return { ok: false as const, is429: false, error: "TMAP 응답에서 이동시간을 찾지 못했어요." };
+  }
+  return { ok: true as const, minutes: Math.max(1, Math.round(sec / 60)) };
+}
+
 export default function MeetMidpoint() {
   const [rows, setRows] = useState<RowState[]>(() => createInitialRows());
   const [error, setError] = useState<string | null>(null);
@@ -329,6 +403,8 @@ export default function MeetMidpoint() {
   const [route12Error, setRoute12Error] = useState<string | null>(null);
   const [route12Loading, setRoute12Loading] = useState(false);
   const [route12FallbackNotice, setRoute12FallbackNotice] = useState<string | null>(null);
+  const [topCandidates, setTopCandidates] = useState<RankedCandidate[] | null>(null);
+  const [bestCandidate, setBestCandidate] = useState<RankedCandidate | null>(null);
 
   const requestIdRef = useRef(0);
   const firstInputRef = useRef<HTMLInputElement | null>(null);
@@ -476,6 +552,8 @@ export default function MeetMidpoint() {
     setRoute12Summary(null);
     setRoute12Error(null);
     setRoute12FallbackNotice(null);
+    setTopCandidates(null);
+    setBestCandidate(null);
 
     const points = rows.map((r) => r.selected).filter(Boolean) as SelectedPlace[];
     if (points.length < 2) {
@@ -487,15 +565,90 @@ export default function MeetMidpoint() {
     setModalOpen(true);
     setModalMessage("장소 좌표를 수집 중…");
     await sleep(450);
-    setModalMessage("중간지점을 계산 중…");
+    setModalMessage("후보 지점을 수집 중…");
     await sleep(350);
 
     const start12 = rows[0]?.selected ?? null;
     const end12 = rows[1]?.selected ?? null;
-    let chosenMid: { lat: number; lng: number } | null = midpointOf(points);
+    let chosenMid: { lat: number; lng: number } | null = null;
 
+    const approxCenter = midpointOf(points) ?? points[0] ?? null;
+    if (!approxCenter) {
+      setError("중간지점을 계산할 수 없어요. (좌표 없음)");
+      setModalOpen(false);
+      return;
+    }
+
+    // 후보 생성: 중심부 + 각 출발지 주변 지하철역(거점) 위주
+    const candidates: Suggestion[] = [];
+    const [centerStations, ...byStarts] = await Promise.all([
+      nearbySuggestions(approxCenter, { keyword: "지하철역", radiusKm: 6, count: 8 }),
+      ...points.map((p) => nearbySuggestions(p, { keyword: "지하철역", radiusKm: 3, count: 4 })),
+    ]);
+    candidates.push(...centerStations);
+    for (const arr of byStarts) candidates.push(...arr);
+
+    const deduped = dedupeSuggestions(candidates).slice(0, MAX_CANDIDATES);
+    if (deduped.length === 0) {
+      setRoute12FallbackNotice(
+        "후보 지점을 만들지 못했어요. (주변 POI 검색 실패) 직선거리 평균 중심으로 대체해 표시합니다."
+      );
+      chosenMid = { lat: approxCenter.lat, lng: approxCenter.lng };
+    } else {
+      setModalMessage(`후보 ${deduped.length}곳 평가 중…`);
+      await sleep(150);
+
+      const ranked: RankedCandidate[] = [];
+      let saw429 = false;
+
+      for (let i = 0; i < deduped.length; i++) {
+        const cand = deduped[i]!;
+        setModalMessage(`후보 평가 중… (${i + 1}/${deduped.length})`);
+
+        const times: number[] = [];
+        let failed = false;
+
+        for (let j = 0; j < points.length; j++) {
+          const start = points[j]!;
+          const r = await transitTimeMinutes(start, cand);
+          if (!r.ok) {
+            if (r.is429) saw429 = true;
+            failed = true;
+            break;
+          }
+          times.push(r.minutes);
+          await sleep(120);
+        }
+
+        if (failed || times.length !== points.length) continue;
+
+        const maxTimeMin = Math.max(...times);
+        const totalTimeMin = times.reduce((a, b) => a + b, 0);
+        const avgTimeMin = totalTimeMin / times.length;
+        const score = maxTimeMin * 1000 + totalTimeMin;
+        ranked.push({ place: cand, timesMin: times, maxTimeMin, totalTimeMin, avgTimeMin, score });
+      }
+
+      ranked.sort((a, b) => a.score - b.score);
+
+      if (saw429 && ranked.length === 0) {
+        const msg =
+          "TMAP 대중교통 길찾기 API 사용량이 초과되어(429) 대중교통 시간 기반 평가를 진행할 수 없었어요. 대신 직선거리 평균 중심으로 대체해 표시합니다.";
+        setRoute12FallbackNotice(msg);
+        chosenMid = { lat: approxCenter.lat, lng: approxCenter.lng };
+      } else if (ranked.length === 0) {
+        setRoute12FallbackNotice("대중교통 시간 평가에 성공한 후보가 없어요. 직선거리 평균 중심으로 대체해 표시합니다.");
+        chosenMid = { lat: approxCenter.lat, lng: approxCenter.lng };
+      } else {
+        const top = ranked.slice(0, 3);
+        setTopCandidates(top);
+        setBestCandidate(top[0] ?? null);
+        chosenMid = { lat: top[0]!.place.lat, lng: top[0]!.place.lng };
+      }
+    }
+
+    // 기존 1↔2 경로 표시(선택된 경우에만): 결과 중심과 무관하게 보조 정보로만 유지
     if (start12 && end12) {
-      setModalMessage("1↔2 대중교통 경로를 불러오는 중…");
       setRoute12Loading(true);
       try {
         const res = await fetch("/api/tmap/transit/routes", {
@@ -510,42 +663,24 @@ export default function MeetMidpoint() {
             lang: 0,
           }),
         });
-        const json = (await res.json()) as {
-          ok?: boolean;
-          data?: unknown;
-          error?: string;
-          upstreamStatus?: number;
-        };
+        const json = (await res.json()) as { ok?: boolean; data?: unknown; error?: string; upstreamStatus?: number };
         if (!res.ok || !json.ok) {
           setRouteBetween12(null);
           setRoute12Summary(null);
-          const is429 = res.status === 429 || json.upstreamStatus === 429 || String(json.error ?? "").includes("429");
-          if (is429) {
-            const msg =
-              "TMAP 대중교통 길찾기 API 사용량이 초과되어(429) 대중교통 경로 기반 계산을 사용할 수 없어요. 대신 직선거리 기준 중간지점으로 대체해 표시합니다.";
-            setRoute12Error(msg);
-            setRoute12FallbackNotice(msg);
-          } else {
-            setRoute12Error(json.error ?? `HTTP ${res.status}`);
-          }
         } else {
           const coords = parseTmapTransitPath(json.data);
           const summary = pickTmapTransitSummary(json.data);
-          if (coords.length < 2) {
-            setRouteBetween12(null);
-            setRoute12Summary(null);
-            setRoute12Error("대중교통 경로 좌표를 찾지 못했어요.");
-          } else {
+          if (coords.length >= 2) {
             setRouteBetween12(coords);
             setRoute12Summary(summary);
-            const transitMid = routeMidpointByDistance(coords);
-            if (transitMid) chosenMid = transitMid;
+          } else {
+            setRouteBetween12(null);
+            setRoute12Summary(null);
           }
         }
-      } catch (e) {
+      } catch {
         setRouteBetween12(null);
         setRoute12Summary(null);
-        setRoute12Error(e instanceof Error ? e.message : "오류");
       } finally {
         setRoute12Loading(false);
       }
@@ -554,11 +689,18 @@ export default function MeetMidpoint() {
     setResultMidpoint(chosenMid);
 
     if (chosenMid) {
-      setModalMessage("중간지점(대중교통 기준) 주소/가까운 역을 찾는 중…");
-      const [address, nearestSubway] = await Promise.all([
-        reverseGeocode(chosenMid.lat, chosenMid.lng),
-        nearestSubwayStation(chosenMid.lat, chosenMid.lng),
-      ]);
+      setModalMessage("결과 주소를 찾는 중…");
+      const address = await reverseGeocode(chosenMid.lat, chosenMid.lng);
+      const nearestSubway =
+        bestCandidate != null
+          ? {
+              name: bestCandidate.place.label,
+              address: bestCandidate.place.address,
+              distanceM: null,
+              lat: bestCandidate.place.lat,
+              lng: bestCandidate.place.lng,
+            }
+          : await nearestSubwayStation(chosenMid.lat, chosenMid.lng);
       setMidpointDetails({ address, nearestSubway });
       await sleep(250);
     }
@@ -606,7 +748,7 @@ export default function MeetMidpoint() {
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[360px_1fr]">
           <section className="rounded-2xl border border-zinc-200 bg-white p-4">
-            <div className="text-sm font-semibold text-zinc-900">대상 장소 (2개)</div>
+            <div className="text-sm font-semibold text-zinc-900">대상 장소 (최대 4개)</div>
             <div className="mt-3 flex flex-col gap-3">
               {rows.map((row, idx) => (
                 <div key={idx} className="relative">
@@ -665,8 +807,8 @@ export default function MeetMidpoint() {
                         <div className="px-3 py-2 text-xs text-zinc-500">검색 결과 없음</div>
                       ) : (
                         <ul className="max-h-64 overflow-auto py-1">
-                          {row.suggestions.map((s) => (
-                            <li key={s.id}>
+                          {row.suggestions.map((s, sIdx) => (
+                            <li key={`${s.id}-${s.lat.toFixed(6)},${s.lng.toFixed(6)}-${sIdx}`}>
                               <button
                                 type="button"
                                 className="w-full cursor-pointer px-3 py-2 text-left hover:bg-zinc-50"
@@ -724,7 +866,7 @@ export default function MeetMidpoint() {
             </button>
 
             <div className="mt-4 text-xs leading-6 text-zinc-500">
-              최소 2개 이상의 장소를 선택해야 중간지점을 찾을 수 있습니다.
+              최소 2개 이상의 장소를 선택해야 중간지점을 찾을 수 있습니다. (최대 {MAX_TARGETS}개)
             </div>
           </section>
 
@@ -798,6 +940,20 @@ export default function MeetMidpoint() {
                   </div>
                 ) : null}
                 <div className="grid grid-cols-1 gap-3 text-sm text-zinc-800 sm:grid-cols-2">
+                  {bestCandidate ? (
+                    <div className="sm:col-span-2">
+                      <div className="text-xs font-semibold text-zinc-500">선정된 만남 후보</div>
+                      <div className="mt-1 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2">
+                        <div className="font-semibold text-zinc-900">{bestCandidate.place.label}</div>
+                        <div className="mt-0.5 text-xs text-zinc-600">{bestCandidate.place.address}</div>
+                        <div className="mt-2 text-xs text-zinc-700">
+                          시간(분): [{bestCandidate.timesMin.join(", ")}] · max {bestCandidate.maxTimeMin} · total{" "}
+                          {bestCandidate.totalTimeMin} · score {bestCandidate.score}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
                   <div className="flex flex-col gap-1">
                     <div className="text-xs font-semibold text-zinc-500">중간지점 주소</div>
                     <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2">
@@ -825,6 +981,28 @@ export default function MeetMidpoint() {
                     </div>
                   </div>
                 </div>
+
+                {topCandidates && topCandidates.length > 1 ? (
+                  <div className="mt-4">
+                    <div className="text-xs font-semibold text-zinc-500">상위 후보</div>
+                    <ol className="mt-2 space-y-2">
+                      {topCandidates.map((c, idx) => (
+                        <li key={`${c.place.id}-${idx}`} className="rounded-xl border border-zinc-200 bg-white px-3 py-2">
+                          <div className="flex items-baseline justify-between gap-3">
+                            <div className="font-semibold text-zinc-900">
+                              {idx + 1}. {c.place.label}
+                            </div>
+                            <div className="text-xs font-mono text-zinc-600">score {c.score}</div>
+                          </div>
+                          <div className="mt-0.5 text-xs text-zinc-600">{c.place.address}</div>
+                          <div className="mt-1 text-xs text-zinc-700">
+                            [{c.timesMin.join(", ")}] · max {c.maxTimeMin} · total {c.totalTimeMin}
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </section>
