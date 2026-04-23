@@ -7,7 +7,7 @@ import { DEFAULT_MAP_CENTER } from "@/app/ui/mapTypes";
 const POINT_COLORS = ["#2563eb", "#7c3aed", "#db2777", "#ea580c", "#16a34a", "#0f766e"] as const;
 const TRANSIT_ROUTE_COLOR = "#0284c7";
 // Kakao 지도 level: 숫자가 클수록 더 넓게(줌 아웃)
-const DEFAULT_LEVEL = 8;
+const DEFAULT_LEVEL = 6;
 const PLACE_MARKER_PX = 30;
 const PLACE_MARKER_OFFSET_X = Math.round(PLACE_MARKER_PX / 2);
 const PLACE_MARKER_OFFSET_Y = PLACE_MARKER_PX;
@@ -119,14 +119,12 @@ export default function KakaoMap({
   points,
   midpoint,
   nearestSubway,
-  showGangnamStartMarker,
   routeBetween12,
   routeMidpoint12,
 }: {
   points: MapPoint[];
   midpoint: { lat: number; lng: number } | null;
   nearestSubway: { name: string; address: string; distanceM: number | null; lat: number; lng: number } | null;
-  showGangnamStartMarker: boolean;
   /** 1↔2 TMAP 대중교통 경로 (있으면 해당 좌표로 표시, 일부 구간은 직선으로 보조) */
   routeBetween12: { lat: number; lng: number }[] | null;
   /** 1↔2 대중교통 경로상의 중간 지점(누적거리 50%) */
@@ -233,9 +231,9 @@ export default function KakaoMap({
 
     // 대상 장소를 모두 지운 경우:
     // - 지도 위 마커/경로는 모두 제거(위에서 이미 제거)
-    // - 마지막으로 계산된 "가까운 지하철역" 위치로 센터 고정 + 기본 줌
+    // - 초기 시작 지점(강남역 DEFAULT_MAP_CENTER)으로 센터 고정 + 기본 줌
     if (sortedPoints.length === 0) {
-      const center = nearestSubway ? { lat: nearestSubway.lat, lng: nearestSubway.lng } : DEFAULT_MAP_CENTER;
+      const center = DEFAULT_MAP_CENTER;
       const fitKey = JSON.stringify({
         empty: true,
         center: [+center.lat.toFixed(6), +center.lng.toFixed(6)],
@@ -247,19 +245,6 @@ export default function KakaoMap({
         lastFitKeyRef.current = fitKey;
       }
       return;
-    }
-
-    if (showGangnamStartMarker) {
-      boundsPts.push(DEFAULT_MAP_CENTER);
-      addMarker(
-        DEFAULT_MAP_CENTER.lat,
-        DEFAULT_MAP_CENTER.lng,
-        svgStartMarkerDataUrl(),
-        72,
-        34,
-        36,
-        34
-      );
     }
 
     for (const p of sortedPoints) {
@@ -335,13 +320,12 @@ export default function KakaoMap({
       routeMid: routeMidpoint12 ? [+routeMidpoint12.lat.toFixed(6), +routeMidpoint12.lng.toFixed(6)] : null,
       mid: midpoint ? [+midpoint.lat.toFixed(6), +midpoint.lng.toFixed(6)] : null,
       subway: nearestSubway ? [+nearestSubway.lat.toFixed(6), +nearestSubway.lng.toFixed(6)] : null,
-      start: showGangnamStartMarker,
     });
     if (lastFitKeyRef.current !== fitKey) {
       fitMapToPoints(map, boundsPts, maps);
       lastFitKeyRef.current = fitKey;
     }
-  }, [ready, sortedPoints, midpoint, nearestSubway, showGangnamStartMarker, routeBetween12, routeMidpoint12]);
+  }, [ready, sortedPoints, midpoint, nearestSubway, routeBetween12, routeMidpoint12]);
 
   return (
     <div className="w-full">

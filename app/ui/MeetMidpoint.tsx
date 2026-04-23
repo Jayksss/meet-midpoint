@@ -389,8 +389,6 @@ export default function MeetMidpoint() {
     address: null,
     nearestSubway: null,
   });
-  /** 중간지점 찾기 시작 전까지 강남역 기본 위치에 「시작」 마커 표시 */
-  const [showGangnamStartMarker, setShowGangnamStartMarker] = useState(true);
   /** 모바일에서만: 찾기 완료 후 결과 요약 모달 */
   const [mobileResultOpen, setMobileResultOpen] = useState(false);
   /** 1·2번: TMAP 대중교통 경로 좌표 */
@@ -561,7 +559,6 @@ export default function MeetMidpoint() {
       return;
     }
 
-    setShowGangnamStartMarker(false);
     setModalOpen(true);
     setModalMessage("장소 좌표를 수집 중…");
     await sleep(450);
@@ -633,7 +630,7 @@ export default function MeetMidpoint() {
 
       if (saw429 && ranked.length === 0) {
         const msg =
-          "TMAP 대중교통 길찾기 API 사용량이 초과되어(429) 대중교통 시간 기반 평가를 진행할 수 없었어요. 대신 직선거리 평균 중심으로 대체해 표시합니다.";
+          "TMAP 대중교통 길찾기 사용량이 초과되어(429) 직선거리 평균 중심으로 대체해 표시합니다.";
         setRoute12FallbackNotice(msg);
         chosenMid = { lat: approxCenter.lat, lng: approxCenter.lng };
       } else if (ranked.length === 0) {
@@ -893,7 +890,6 @@ export default function MeetMidpoint() {
               points={selectedPoints}
               midpoint={resultMidpoint}
               nearestSubway={midpointDetails.nearestSubway}
-              showGangnamStartMarker={showGangnamStartMarker}
               routeBetween12={route12ForMap}
               routeMidpoint12={routeMidpoint12}
             />
