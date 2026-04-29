@@ -45,7 +45,7 @@ type RankedCandidate = {
   score: number;
 };
 
-const MAX_TARGETS = 4;
+const MAX_TARGETS = 2;
 const MAX_CANDIDATES = 10;
 /** 모바일 판별·결과 모달 자동 닫힘 (max-width 기준은 Tailwind md 미만과 맞춤) */
 const MOBILE_MAX_WIDTH_PX = 768;
@@ -563,7 +563,7 @@ export default function MeetMidpoint() {
     setTopCandidates(null);
     setBestCandidate(null);
 
-    const points = rows.map((r) => r.selected).filter(Boolean) as SelectedPlace[];
+    const points = rows.slice(0, 2).map((r) => r.selected).filter(Boolean) as SelectedPlace[];
     if (points.length < 2) {
       setError("최소 2개 이상의 장소를 선택해 주세요.");
       return;
